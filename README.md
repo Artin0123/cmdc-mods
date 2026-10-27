@@ -30,7 +30,7 @@ cp -r mods/system-prompt ~/.commandcode/mods/
 cp -r mods/shell-utf8    ~/.commandcode/mods/
 ```
 
-> **1、2 只選一種，不要混用。** 混用會讓同一個 mod 出現兩份（名稱都叫 `system-prompt` / `shell-utf8`），載入器只保留第一個並警告。之前手動裝過單一檔案（`~/.commandcode/mods/system-prompt.ts`、`shell-utf8.ts`）的話，先刪掉再改用上面任一種。
+> **1、2 只選一種，不要混用。** 混用會讓同一個 mod 出現兩份（名稱都叫 `system-prompt` / `shell-utf8`），載入器只保留第一個並警告。
 
 ## 確認有載入
 
