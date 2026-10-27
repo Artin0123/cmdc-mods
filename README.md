@@ -31,11 +31,24 @@
 
 ## 安裝
 
+GitHub 一行安裝（推薦，受 `cmdc` 官方管理）：
+
 ```bash
-cp index.ts ~/.commandcode/mods/system-prompt.ts
+cmdc mods add Artin0123/cmdc-system-prompt -g
 ```
 
-驗證：`cmdc mods list` 應列出 `system-prompt`；`cmdc mods inspect` 應顯示 hooks: `appendSystemPrompt, transformSystemPrompt, onSessionStart`。
+之後的管理：
+
+```bash
+cmdc mods list                                    # 應列出 cmd-mod-system-prompt
+cmdc mods update                                  # 拉取本 repo 最新版
+cmdc mods disable cmd-mod-system-prompt           # 暫停不用（不刪檔）
+cmdc mods remove cmd-mod-system-prompt            # 移除
+cmdc mods inspect "~/.commandcode/mods/.registry/git/github.com/Artin0123/cmdc-system-prompt/index.ts"
+                                                  # 靜態檢視 hooks
+```
+
+不走 `cmdc` 的手動方式也可以：`cp index.ts ~/.commandcode/mods/system-prompt.ts`
 
 ## 已驗證（command-code 1.88.0 實測）
 
