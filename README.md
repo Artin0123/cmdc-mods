@@ -1,4 +1,4 @@
-# cmd-mod-system-prompt
+# cmdc-system-prompt
 
 讓 Command Code 支援 pi agent 慣例的系統提示詞檔案——**檔名即功能，零設定**。
 
@@ -40,10 +40,10 @@ cmdc mods add Artin0123/cmdc-system-prompt -g
 之後的管理：
 
 ```bash
-cmdc mods list                                    # 應列出 cmd-mod-system-prompt
+cmdc mods list                                    # 應列出 cmdc-system-prompt
 cmdc mods update                                  # 拉取本 repo 最新版
-cmdc mods disable cmd-mod-system-prompt           # 暫停不用（不刪檔）
-cmdc mods remove cmd-mod-system-prompt            # 移除
+cmdc mods disable cmdc-system-prompt           # 暫停不用（不刪檔）
+cmdc mods remove cmdc-system-prompt            # 移除
 cmdc mods inspect "~/.commandcode/mods/.registry/git/github.com/Artin0123/cmdc-system-prompt/index.ts"
                                                   # 靜態檢視 hooks
 ```
