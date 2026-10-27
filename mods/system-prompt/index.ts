@@ -4,7 +4,7 @@ import {resolve} from 'node:path';
 import type {ModApi} from '@commandcode/harness';
 
 /**
- * cmdc-system-prompt
+ * system-prompt
  *
  * Filename IS the feature (pi-agent naming, Command Code locations).
  * Zero settings - create a file, done:

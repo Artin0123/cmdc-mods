@@ -1,10 +1,13 @@
 {
-	"name": "cmdc-system-prompt",
-	"version": "0.2.1",
-	"description": "pi-style APPEND_SYSTEM.md / SYSTEM.md support for Command Code - filename IS the feature, zero settings.",
+	"name": "cmdc-mods",
+	"version": "0.3.0",
+	"description": "Command Code mods: pi-style SYSTEM.md / APPEND_SYSTEM.md prompts, and UTF-8-safe shell output on Windows.",
 	"keywords": ["cmd-mod", "cmd-mod-hook"],
 	"type": "module",
+	"scripts": {
+		"test": "node test/shell-utf8/index.mjs"
+	},
 	"commandcode": {
-		"mods": ["./index.ts"]
+		"mods": ["./mods/system-prompt/index.ts", "./mods/shell-utf8/index.ts"]
 	}
 }
