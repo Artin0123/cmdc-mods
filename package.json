@@ -1,0 +1,10 @@
+{
+	"name": "cmd-mod-system-prompt",
+	"version": "0.2.0",
+	"description": "pi-style APPEND_SYSTEM.md / SYSTEM.md support for Command Code - filename IS the feature, zero settings.",
+	"keywords": ["cmd-mod", "cmd-mod-hook"],
+	"type": "module",
+	"commandcode": {
+		"mods": ["./index.ts"]
+	}
+}
