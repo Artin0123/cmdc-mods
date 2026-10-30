@@ -1,13 +1,13 @@
 {
 	"name": "cmdc-mods",
 	"version": "0.3.0",
-	"description": "Command Code mods: pi-style SYSTEM.md / APPEND_SYSTEM.md prompts, and UTF-8-safe shell output on Windows.",
+	"description": "Command Code mods: pi-style SYSTEM.md / APPEND_SYSTEM.md prompts, and a unified Windows shell_command layer (Git Bash routing + UTF-8-safe cmd output).",
 	"keywords": ["cmd-mod", "cmd-mod-hook"],
 	"type": "module",
 	"scripts": {
-		"test": "node test/shell-utf8/index.mjs"
+		"test": "node test/shell-windows/index.mjs"
 	},
 	"commandcode": {
-		"mods": ["./mods/system-prompt/index.ts", "./mods/shell-utf8/index.ts"]
+		"mods": ["./mods/system-prompt/index.ts", "./mods/shell-windows/index.ts"]
 	}
 }

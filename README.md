@@ -5,12 +5,12 @@
 | mod | 做什麼 |
 | --- | --- |
 | `system-prompt` | 用 `SYSTEM.md` / `APPEND_SYSTEM.md` 自訂或附加系統提示詞 |
-| `shell-utf8` | Windows 上修掉 `shell_command` 的中文亂碼 |
+| `shell-windows` | Windows `shell_command` 整合層：unix 指令透明路由 Git Bash；純 cmd 指令包 PowerShell 修 UTF-8 亂碼 |
 
 ```
 mods/system-prompt/index.ts
-mods/shell-utf8/index.ts
-test/shell-utf8/index.mjs
+mods/shell-windows/index.ts
+test/shell-windows/index.mjs
 ```
 
 mod 的名稱取自資料夾名（`index.ts` 就是 mod 本體）。
@@ -27,10 +27,10 @@ cmdc mods add Artin0123/cmdc-mods -g
 
 ```bash
 cp -r mods/system-prompt ~/.commandcode/mods/
-cp -r mods/shell-utf8    ~/.commandcode/mods/
+cp -r mods/shell-windows ~/.commandcode/mods/
 ```
 
-> **1、2 只選一種，不要混用。** 混用會讓同一個 mod 出現兩份（名稱都叫 `system-prompt` / `shell-utf8`），載入器只保留第一個並警告。
+> **1、2 只選一種，不要混用。** 混用會讓同一個 mod 出現兩份（名稱都叫 `system-prompt` / `shell-windows`），載入器只保留第一個並警告。
 
 ## 確認有載入
 
@@ -47,8 +47,8 @@ Mods (2)
 ## 停用 / 移除
 
 ```bash
-cmdc mods disable shell-utf8      # 停用，檔案留著
-cmdc mods enable  shell-utf8
+cmdc mods disable shell-windows      # 停用，檔案留著
+cmdc mods enable  shell-windows
 cmdc mods remove  Artin0123/cmdc-mods
 ```
 
@@ -90,48 +90,54 @@ cmdc mods remove  Artin0123/cmdc-mods
 
 ---
 
-## shell-utf8
+## shell-windows
 
-**只影響 Windows，只影響 `shell_command`。**
+**只影響 Windows，只影響 `shell_command`。一個 hook、每行指令一個決策點。**
 
-### 解決什麼
+### 每行指令走法
 
-`cmd.exe` 在中文 Windows 輸出 GBK 位元組，harness 用 UTF-8 解，中文就變成 `����`：
+| 指令形態 | 走法 |
+| --- | --- |
+| 開頭是 `bash` / `sh` / `zsh` | 直接換成 Git Bash 路徑（不經過 System32 的 WSL stub） |
+| 行內有 unix 工具（`ls`、`grep`、…） | 整行路由 `"C:\...\Git\bin\bash.exe" -c '<line>'`，bash 自產 UTF-8 |
+| 純 cmd 指令（`dir`、`ipconfig`、…） | 包 `powershell -EncodedCommand`，console CP 65001 再進 cmd |
+| 輸出本來就是 UTF-8 的工具（`git`、`node`、`python`…） | 不包裝，+0ms |
 
-```
-GBK: 20 c7 fd b6 af c6 f7   →   " � "
-```
+路由時順手翻譯：cmd 內建（`dir`/`copy`/`del`/`rd`/`set`/`ren`/`type`/simple `if`/`for`/`mklink`）、
+`%VAR%`→`$VAR`、`%ERRORLEVEL%`→`$?`、`C:\a\b`→`C:/a/b`、`2>&1` 原樣保留、
+cmd 的裸 `a & b` → bash `a ; b`（依序而非丟背景）、`2>nul`/`>nul`/`<nul` → `/dev/null`。
 
-裝了之後 `dir`、`ipconfig`、`netstat`、`findstr`、`tasklist` 的中文內容都正常。
+翻不動的（照原樣大聲失敗，不猜測）：`goto`、label、帶 flag 的 `if`/`for`巢狀、`mklink /j`、delayed expansion。
 
 ### 會看到什麼
 
 | 項目 | 變化 |
 | --- | --- |
-| 中文檔名、`echo` 的中文、程式輸出的中文 | 正常顯示 |
+| 中文檔名、`echo` 的中文、程式輸出的中文（純 cmd 行） | 正常顯示 |
 | 工具自己的訊息標頭 | 變英文，例如 `Volume in drive C has no label.` |
+| unix 指令在 Windows | 直接可用 |
 
-指令語意不變：`&&`、`|`、`>`、`%VAR%`、引號、離開碼都跟原生 `cmd` 一樣。
+指令語意不變：`&&`、`|`、`>`、`%VAR%`、引號、離開碼都跟原生 `cmd` 一致。
 
 ### 成本
 
-被包裝的指令多約 **+120 ms**（PowerShell 啟動）。`git`、`node`、`python`、`rg`、`jq` 這類本來就輸出 UTF-8 的工具會跳過，不付這個成本。
+路由行：bash 啟動約 +50 ms；被包裝的純 cmd 行：約 **+120 ms**（PowerShell 啟動）。UTF-8 工具跳過。
 
-### 限制
+### 已知缺口
 
-| 限制 | 說明 |
+| 缺口 | 說明 |
 | --- | --- |
-| 只涵蓋 `shell_command` | 背景的 `monitor_command` 不受影響，亂碼也不會被修 |
-| 指令超過 1800 字元不包裝 | Windows 命令列長度上限 |
-| 冷啟動比熱啟動慢 | 熱態 +120 ms 已量，冷態未量 |
-| Python < 3.15 | 3.15 起預設 UTF-8；更舊的版本自行加 `set "PYTHONIOENCODING=utf-8" &&` |
+| 路由行內的 `cmd //c` 中文輸出會亂碼 | 內層 cmd 的 GBK 未經包裝；混合行的中文本來就沒修，路由不改這一點 |
+| 純 cmd 行超過 1800 字元不包裝 | Windows 命令列長度上限；路由行另有 7000 上限 |
+| 只涵蓋 `shell_command` | 背景的 `monitor_command` 不受影響 |
+| Python < 3.15 | 3.15 起預設 UTF-8；更舊的自行 `set "PYTHONIOENCODING=utf-8" &&` |
 
 ---
 
 ## 開發
 
 ```bash
-node test/shell-utf8/index.mjs
+node test/shell-windows/index.mjs
 ```
 
 需要 Node ≥ 22.6（23.6 起預設支援 `.ts`，更舊的要加 `--experimental-strip-types`）。
