@@ -40,8 +40,8 @@ cmdc mods list
 
 ```
 Mods (2)
-  shell-utf8     · user · ~\.commandcode\mods\shell-utf8\index.ts
-  system-prompt  · user · ~\.commandcode\mods\system-prompt\index.ts
+  shell-windows  · user · from git:github.com/Artin0123/cmdc-mods
+  system-prompt  · user · from git:github.com/Artin0123/cmdc-mods
 ```
 
 ## 停用 / 移除
