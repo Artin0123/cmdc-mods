@@ -1,4 +1,4 @@
-// shell-windows -- one mod, one decision point, for Windows shell_command +
+// env-guard -- one mod, one decision point, for Windows shell_command +
 // powershell.
 //
 // The harness spawns cmd.exe on this machine. Failure classes and the fixes:
@@ -58,8 +58,10 @@
 // Everything below repairs breakage THIS environment's tooling inflicts, in
 // exactly three classes:
 //   * posix/linux syntax the harness's cmd.exe layer breaks -- multiline
-//     truncation, quote-toggle argv tearing, host-side /tmp file tools, GBK
-//     console output, CLIXML noise, ASCII $OutputEncoding;
+//     truncation, quote-toggle argv tearing, host-side /tmp AND MSYS
+//     drive-letter (/c/...) file-tool paths, GBK console output, CLIXML
+//     noise, ASCII $OutputEncoding, bash `for`/`if` grammar misrouted into
+//     the cmd wrap, and `bash -c` payloads exposed to cmd's parse layer;
 //   * git-bash + windows turning normal Linux behavior into a pathological
 //     artifact -- reserved-name `nul` redirect targets that exit 0 and resist
 //     deletion;
@@ -330,6 +332,11 @@ const BUILTIN_FIXERS: Record<string, (t: string[]) => string[] | null> = {
 // cmd syntax with no faithful bash form: leave the whole line alone.
 const BAIL_HEADS = new Set(['goto', 'label']);
 
+// Segment heads that cannot start a cmd command: seeing one marks the line
+// as bash-intent (cmd's FOR/IF embed do/then inside their own grammar, but a
+// SEGMENT HEAD of do/done/fi/then/elif/esac never occurs in valid cmd).
+const BASH_KEYWORD_HEADS = new Set(['do', 'done', 'fi', 'then', 'elif', 'esac']);
+
 // Sanity cap on routed commands (the temp-script path itself has no argv
 // cap; this only keeps absurd inputs out of the router).
 const MAX_ROUTE = 7000;
@@ -356,6 +363,13 @@ const SKIP_UTF8 =
 // `$(` and backticks (only safe after cmd's parse layer). Any of these ships
 // the payload as a temp script instead.
 const CMD_HOSTILE = /["%]|\$\(|`/;
+// Launcher payloads (`bash -c ...`) travel inside SINGLE quotes, which cmd
+// does not honor -- so every cmd-active metacharacter is live there, not
+// just the double-quote/%/$( set: cmd steals `>` redirects and splits on
+// `|`/`&` before bash ever sees the payload (measured live: a background
+// `bash -c 'while ...; do echo x > /tmp/f; done'` died with cmd's "The
+// system cannot find the path specified", redirect performed by cmd).
+const LAUNCHER_HOSTILE = /["%<>|&]|\$\(|`/;
 
 // A unix-style absolute path (a token with two or more slashes). cmd-native
 // heads carrying one (`cd /c/x`, `echo hi > /tmp/f`) can only run under MSYS.
@@ -409,6 +423,21 @@ export function rewriteTempPath(p: string): string {
   if (p === '$TMP' || p.startsWith('$TMP/')) return norm(p.slice(4));
   if (lower === 'c:/tmp' || lower.startsWith('c:/tmp/')) return norm(p.slice(6));
   if (lower === 'c:\\tmp' || lower.startsWith('c:\\tmp\\')) return norm(p.slice(6));
+  return p;
+}
+
+// MSYS drive-letter spellings: git-bash habit writes /c/Users/... and the
+// file tools resolve that host-side as C:\c\Users\... -- a silent
+// wrong-place success (measured twice in live sessions: the file landed in
+// C:\c\ while the tool reported the agent's path verbatim). A single-letter
+// first segment is unambiguous MSYS drive notation; longer first segments
+// (/etc, /usr) have real MSYS-root mappings that would be a guess, so they
+// stay untouched.
+export function rewriteFilePath(p: string): string {
+  const t = rewriteTempPath(p);
+  if (t !== p) return t;
+  const m = /^\/([A-Za-z])(?=\/|$)/.exec(p);
+  if (m) return rewriteTempPath(m[1]!.toUpperCase() + ':' + (p.slice(m[0].length) || '/'));
   return p;
 }
 
@@ -936,6 +965,16 @@ function routeLine(
   // not hardcoded): with conversion on, `//c` is the spelling that works.
   const fixFlags = pathConvDisabled();
   const built: string[] = [];
+  // Any bash-keyword segment head marks the line bash-intent (measured: a
+  // bash `for i in ...; do ...; done` hit the for fixer, which only knows
+  // cmd's `for %i in (...) do ...` grammar, and its null short-circuited the
+  // whole line into the pure-cmd wrap where cmd dies with "i was unexpected
+  // at this time"). Used to keep fixer-null dual-use heads (for/if) from
+  // bailing a line that is simply bash syntax.
+  const keywordHead = items.some((it) =>
+    BASH_KEYWORD_HEADS.has(
+      (tokensOf(extractAssignments(it.text).rest)[0] ?? '').toLowerCase().replace(/\.exe$/, ''),
+    ));
   for (const item of items) {
     const {pre, rest} = extractAssignments(item.text);
     let toks = tokensOf(rest);
@@ -948,10 +987,25 @@ function routeLine(
     let builtin = false;
     if (Object.prototype.hasOwnProperty.call(BUILTIN_FIXERS, head)) {
       const out = BUILTIN_FIXERS[head]!(toks);
-      if (!out) return null;
-      builtin = true;
-      delegates = out[0] === 'cmd';
-      piece = pre + out.join(' ');
+      if (!out) {
+        // Dual-use head the fixers cannot translate. Valid cmd syntax that
+        // is merely too complex keeps the loud bail (for /L, flag-bearing
+        // if). But cmd FOR requires the %loop-var and forbids /flags-only
+        // shapes without one, so `for` with neither -- on a line carrying
+        // do/done segment heads -- is bash FOR: pass it through. Same for IF
+        // when a then/fi segment head proves bash intent.
+        if (head === 'for' && keywordHead && !/^for\s+[%/]/.test(rest)) {
+          unixCount++;
+          piece = (pre + rest).trimEnd();
+        } else if (head === 'if' && keywordHead) {
+          unixCount++;
+          piece = (pre + rest).trimEnd();
+        } else return null;
+      } else {
+        builtin = true;
+        delegates = out[0] === 'cmd';
+        piece = pre + out.join(' ');
+      }
     } else if (BAIL_HEADS.has(head)) {
       return null;
     } else if (head === 'cmd') {
@@ -1174,8 +1228,67 @@ function detectBash(): string | null {
   return null;
 }
 
+// Shared pipeline for every tool whose command string reaches cmd's parse
+// layer (shell_command and monitor_command): launcher rewrite with payload
+// safety, //c normalization, bash route, utf8 wrap. Returns the command
+// unchanged when no repair applies.
+function routeOrWrap(command: string): string {
+  const trimmed = command.trim();
+  const head0 = trimmed.split(/\s+/)[0]!.toLowerCase().replace(/\.exe$/, '');
+  // `bash`/`sh` resolve through the detected install (the PATH `bash` may
+  // be the WSL stub in System32; `sh` runs POSIX mode via sh.exe).
+  // `zsh` is NOT rewritten: invoking it is deliberate, System32 has no
+  // zsh stub, and mapping it to bash would override the agent's intent.
+  const launcherExe =
+    head0 === 'bash' ? BASH_WRAP_BASH :
+    head0 === 'sh' ? (existsSync(`${dirname(BASH_WRAP_BASH)}\\sh.exe`) ? `${dirname(BASH_WRAP_BASH)}\\sh.exe` : BASH_WRAP_BASH) :
+    null;
+  if (launcherExe) {
+    const rest = trimmed.slice(head0.length);
+    // The payload of `bash -c ...` must survive cmd's parse layer like
+    // every routed line: cmd toggles quoting at each raw `"` and steals
+    // > < even from single-quoted payloads (measured live: a background
+    // `bash -c 'while ...; do echo x > /tmp/f; done'` died with cmd's
+    // "The system cannot find the path specified" because cmd performed
+    // the redirect itself, GBK-mojibake in the harness's stderr pane).
+    // Hostile payloads ship as a temp script -- the same mechanism the
+    // bash route uses; clean payloads keep the inline form.
+    const cm = /^\s*(-c)\s+([\s\S]+)$/.exec(rest);
+    if (cm) {
+      let body = cm[2]!;
+      const q = /^"([\s\S]*)"$/.exec(body) ?? /^'([\s\S]*)'$/.exec(body);
+      if (q) body = q[1]!;
+      if (LAUNCHER_HOSTILE.test(body)) {
+        // shipScript returns the full `"bash" "<file>"` command.
+        const shipped = shipScript(body);
+        if (shipped) return shipped;
+      }
+    }
+    return `"${launcherExe}"` + rest;
+  }
+  if (head0 === 'cmd' && pathConvDisabled()) command = normalizeDoubledCmdFlags(command);
+
+  // Deliberate external shells are hands-off: `powershell -Command ...`
+  // and `powershell -EncodedCommand ...` pass through untouched (the
+  // base64 payload survives cmd verbatim, so there is no environment
+  // breakage to fix). Rerouting their payloads into bash would override
+  // the agent's shell choice -- valid PowerShell using aliases
+  // (`gci | sort`) runs fine today and must keep doing so; invalid
+  // payloads fail loudly and the agent self-corrects.
+
+  // bash route: within a sanity length cap only.
+  if (command.length <= MAX_ROUTE) {
+    const routed = buildRouted(command);
+    if (routed) return routed;
+  }
+
+  // Pure cmd: fix the code page unless the tool already speaks UTF-8.
+  if (SKIP_UTF8.test(command)) return command;
+  if (command.length > MAX_WRAP) return command;
+  return wrapCommand(command);
+}
+
 export default function (api: ModApi): void {
-  try { writeFileSync('C:\\Users\\artin\\AppData\\Local\\Temp\\cc-dbg-mod-loaded.txt', String(Date.now())); } catch { /* dbg */ }
   if (!IS_WINDOWS) return;
   const bash = detectBash();
   if (!bash) return; // no MSYS bash found: mod stays inert
@@ -1184,13 +1297,14 @@ export default function (api: ModApi): void {
 
   api.hooks({
     beforeToolCall: ({toolName, input}) => {
-      try { writeFileSync('C:\\Users\\artin\\AppData\\Local\\Temp\\cc-dbg-hooknames.txt', String(Date.now()) + ' ' + toolName + '\n', {flag: 'a'}); } catch { /* dbg */ }
       if (PATH_TOOLS.has(toolName)) {
-        // File tools resolve /tmp & friends host-side (see rewriteTempPath).
+        // File tools resolve /tmp & friends host-side (see rewriteTempPath),
+        // and MSYS drive-letter paths (/c/...) as C:\c\... (see
+        // rewriteFilePath).
         for (const key of PATH_KEYS) {
           const v = (input as Record<string, unknown>)?.[key];
           if (typeof v === 'string') {
-            const rewritten = rewriteTempPath(v);
+            const rewritten = rewriteFilePath(v);
             if (rewritten !== v) {
               return {input: {...input, [key]: rewritten}};
             }
@@ -1199,7 +1313,6 @@ export default function (api: ModApi): void {
         return undefined;
       }
       if (toolName === 'powershell') {
-        try { writeFileSync('C:\\Users\\artin\\AppData\\Local\\Temp\\cc-dbg-ps-hook.txt', String(Date.now()) + '\n' + command.slice(0, 120)); } catch { /* dbg */ }
         // The harness appends the progress stream to every powershell call as
         // CLIXML XML (e.g. "Preparing module for first use"). Silencing the
         // progress preference removes it (measured). $OutputEncoding is also
@@ -1216,44 +1329,40 @@ export default function (api: ModApi): void {
           `try { $OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch {}; ` +
           command}};
       }
+      if (toolName === 'monitor_command') {
+        // Monitor feeds its command string through the same cmd.exe parse
+        // layer as shell_command but was previously hands-off -- measured:
+        // a single-string bash `for i in ...; do ...; done` died with cmd's
+        // GBK "此時不應有 i" (exit 1) while the identical shell_command line
+        // routes fine. The args-split form hands argv to the process
+        // natively and measured working, so it stays untouched. `directory`
+        // gets the same file-path repair as the file tools.
+        const rec = input as Record<string, unknown>;
+        const dir = typeof rec?.directory === 'string' ? rec.directory : '';
+        const command = typeof rec?.command === 'string' ? rec.command : '';
+        let patch: Record<string, unknown> | null = null;
+        if (dir) {
+          const rd = rewriteFilePath(dir);
+          if (rd !== dir) patch = {directory: rd};
+        }
+        // The args-split form hands argv to the process natively and measured
+        // working, so its command stays untouched (path repair above still
+        // applies -- it is form-independent).
+        if (Array.isArray(rec?.args) && rec.args.length > 0) {
+          return patch ? {input: {...input, ...patch}} : undefined;
+        }
+        if (command.trim() && !command.startsWith(oursPrefix)) {
+          const transformed = routeOrWrap(command);
+          if (transformed !== command) patch = {...(patch ?? {}), command: transformed};
+        }
+        return patch ? {input: {...input, ...patch}} : undefined;
+      }
       if (toolName !== 'shell_command') return undefined;
-      let command = typeof input?.command === 'string' ? input.command : '';
+      const command = typeof input?.command === 'string' ? input.command : '';
       if (!command.trim()) return undefined;
       if (command.startsWith(oursPrefix)) return undefined; // already routed
-
-      const trimmed = command.trim();
-      const head0 = trimmed.split(/\s+/)[0]!.toLowerCase().replace(/\.exe$/, '');
-      // `bash`/`sh` resolve through the detected install (the PATH `bash` may
-      // be the WSL stub in System32; `sh` runs POSIX mode via sh.exe).
-      // `zsh` is NOT rewritten: invoking it is deliberate, System32 has no
-      // zsh stub, and mapping it to bash would override the agent's intent.
-      const launcherExe =
-        head0 === 'bash' ? bash :
-        head0 === 'sh' ? (existsSync(`${dirname(bash)}\\sh.exe`) ? `${dirname(bash)}\\sh.exe` : bash) :
-        null;
-      if (launcherExe) {
-        return {input: {...input, command: `"${launcherExe}"` + trimmed.slice(head0.length)}};
-      }
-      if (head0 === 'cmd' && pathConvDisabled()) command = normalizeDoubledCmdFlags(command);
-
-      // Deliberate external shells are hands-off: `powershell -Command ...`
-      // and `powershell -EncodedCommand ...` pass through untouched (the
-      // base64 payload survives cmd verbatim, so there is no environment
-      // breakage to fix). Rerouting their payloads into bash would override
-      // the agent's shell choice -- valid PowerShell using aliases
-      // (`gci | sort`) runs fine today and must keep doing so; invalid
-      // payloads fail loudly and the agent self-corrects.
-
-      // bash route: within a sanity length cap only.
-      if (command.length <= MAX_ROUTE) {
-        const routed = buildRouted(command);
-        if (routed) return {input: {...input, command: routed}};
-      }
-
-      // Pure cmd: fix the code page unless the tool already speaks UTF-8.
-      if (SKIP_UTF8.test(command)) return undefined;
-      if (command.length > MAX_WRAP) return undefined;
-      return {input: {...input, command: wrapCommand(command)}};
+      const transformed = routeOrWrap(command);
+      return transformed === command ? undefined : {input: {...input, command: transformed}};
     },
   });
 }

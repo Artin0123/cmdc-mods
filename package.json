@@ -1,13 +1,16 @@
 {
-	"name": "cmdc-mods",
-	"version": "0.3.0",
-	"description": "Command Code mods: pi-style SYSTEM.md / APPEND_SYSTEM.md prompts, and a unified Windows shell_command layer (Git Bash routing + UTF-8-safe cmd output).",
-	"keywords": ["cmd-mod", "cmd-mod-hook"],
+	"name": "harness-plugins",
+	"version": "0.4.0",
+	"description": "環境修復插件合集：同一套 env-guard 的多 host 實作（Command Code mods + pi extensions + OpenCode v2 plugins）與 system-prompt mod。",
+	"keywords": ["cmd-mod", "cmd-mod-hook", "pi-package", "pi-extension", "opencode-plugin"],
 	"type": "module",
 	"scripts": {
-		"test": "node test/shell-windows/index.mjs"
+		"test": "node cmdc-mods/tests/env-guard/index.mjs"
 	},
 	"commandcode": {
-		"mods": ["./mods/system-prompt/index.ts", "./mods/shell-windows/index.ts"]
+		"mods": ["./cmdc-mods/system-prompt/index.ts", "./cmdc-mods/env-guard/index.ts"]
+	},
+	"pi": {
+		"extensions": ["./pi-extensions"]
 	}
 }

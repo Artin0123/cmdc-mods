@@ -1,0 +1,9 @@
+{
+  "name": "opencode-chat-trim-context",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "index.ts",
+  "peerDependencies": {
+    "@opencode/plugin": "^2.2.0"
+  }
+}

@@ -1,6 +1,6 @@
-// Regression tests for mods/shell-windows/index.ts
+// Regression tests for cmdc-mods/env-guard/index.ts
 //
-//   node test/shell-windows/index.mjs
+//   node cmdc-mods/tests/env-guard/index.mjs
 //
 // Imports the mod's TypeScript directly (no build step, same idea as jiti),
 // calls the real beforeToolCall hook against a stub cmd, and (sections B/C)
@@ -9,9 +9,10 @@
 //
 // Needs Node >= 22.6 with --experimental-strip-types (default from 23.6).
 //
-// NOTE: this file lives in test/, never in mods/. Discovery treats any file
-// matching /\.(ts|js|mts|mjs)$/ inside a mod folder as a mod of its own, so a
-// test file dropped next to a mod's index.ts would register as a second mod.
+// NOTE: this file lives in cmdc-mods/tests/ (host folder, OUTSIDE the mod
+// folder). Discovery treats any script file inside a mod folder as another
+// mod of its own, so a test file dropped next to a mod's index.ts would
+// register as a second mod.
 
 import {spawnSync} from 'node:child_process';
 import {existsSync, mkdtempSync, readFileSync, writeFileSync} from 'node:fs';
@@ -20,7 +21,7 @@ import {dirname, join} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const modPath = join(here, '..', '..', 'mods', 'shell-windows', 'index.ts');
+const modPath = join(here, '..', '..', 'env-guard', 'index.ts');
 
 const CN = String.fromCharCode(0x4e2d, 0x6587); // "zhong wen"
 const CN_GBK = 'd6d0cec4';
@@ -272,7 +273,7 @@ check('scope: zsh still runs zsh (routed so MSYS-installed zsh is reachable)',
 
 // ============ B. execution: utf8 regression (spawnSync real runs) ============
 
-const dir = mkdtempSync(join(tmpdir(), 'shell-windows-'));
+const dir = mkdtempSync(join(tmpdir(), 'env-guard-'));
 writeFileSync(join(dir, CN + '.txt'), 'x', 'utf8');
 const plain = join(dir, 'plain.txt');
 writeFileSync(plain, 'hello world\r\n', 'utf8');
@@ -353,7 +354,8 @@ check('C: percent line end-to-end',
 
 // inner `cmd /c ...` must reach cmd's option layer -- `//c` used to literally
 // start an interactive cmd (banner + prompt instead of the actual command)
-const rInner = run(out('dir && ls -la'), {cwd: join(here, '..', '..')});
+// (cwd: repo root -- tests/env-guard is three levels below it)
+const rInner = run(out('dir && ls -la'), {cwd: join(here, '..', '..', '..')});
 const rInnerText = rInner.stdout.toString();
 check('C: inner cmd /c produces no cmd banner', !rInnerText.includes('Microsoft Windows ['), rInnerText.slice(0, 120));
 check('C: inner cmd /c satisfies the && chain (ls ran)', rInnerText.includes('README.md'));
@@ -494,6 +496,105 @@ const rAnchor = run(out('cat /tmp/cc-anchor-test.txt && rm /tmp/cc-anchor-test.t
 check('F: file-tool /tmp and bash /tmp are the same dir',
   rAnchor.status === 0 && rAnchor.stdout.toString().includes('anchor-ok'),
   JSON.stringify(rAnchor.stdout?.toString()) + String(rAnchor.status));
+
+// ============ G. live-session regressions (measured failures) ============
+
+// -- file tools: MSYS drive-letter paths landed in C:\c\... (measured twice
+//    in live one-shot sessions: write_file('/c/Users/...') reported success
+//    while the file was created at C:\c\Users\...) --
+check('G: write_file /c/Users/x -> C:/Users/x',
+  rtFile('/c/Users/artin/x.txt') === 'C:/Users/artin/x.txt',
+  JSON.stringify(rtFile('/c/Users/artin/x.txt')));
+check('G: write_file bare /d -> D:/', rtFile('/d') === 'D:/', JSON.stringify(rtFile('/d')));
+check('G: write_file lowercase drive uppercase result',
+  rtFile('/c/x.txt') === 'C:/x.txt', JSON.stringify(rtFile('/c/x.txt')));
+check('G: multi-letter first segment untouched (/etc)',
+  rtFile('/etc/hosts') === '/etc/hosts', JSON.stringify(rtFile('/etc/hosts')));
+check('G: read_directory /c/... -> C:/...',
+  (() => {
+    const p = hooks.beforeToolCall({toolName: 'read_directory', input: {path: '/c/Users'}})
+      ?.input?.path ?? '/c/Users';
+    return p === 'C:/Users';
+  })(), 'read_directory /c/Users');
+
+// -- bash `for i in ...; do ...; done` was misrouted into the pure-cmd wrap
+//    (measured live: exit 1, "i was unexpected at this time") --
+const forBash = out('for i in 1 2 3; do echo $i; done');
+check('G: bash for-loop routes to bash',
+  typeof forBash === 'string' && forBash.startsWith('"C:\\') &&
+  /bash\.exe" -c "for i in 1 2 3 ?; ?do echo \$i ?; ?done"/.test(forBash),
+  JSON.stringify(forBash));
+const forCmd = out('for /L %i in (1,1,3) do echo %i');
+check('G: cmd for /L keeps the loud cmd wrap',
+  typeof forCmd === 'string' && forCmd.startsWith('powershell'),
+  JSON.stringify(forCmd));
+// cmd `for %i in (a,b,c) do echo %i` runs natively under cmd -- per
+// native-execution-first it stays in the cmd wrap even though a translation
+// exists; only hostile payloads force the bash route.
+const forCmdVar = out('for %i in (a,b,c) do echo %i');
+check('G: cmd for %i keeps native cmd wrap',
+  typeof forCmdVar === 'string' && forCmdVar.startsWith('powershell'),
+  JSON.stringify(forCmdVar));
+const ifBash = out('if [ -e x ]; then echo y; fi');
+check('G: bash if/then/fi routes to bash',
+  typeof ifBash === 'string' && ifBash.startsWith('"C:\\') && ifBash.includes('bash.exe" -c "'),
+  JSON.stringify(ifBash));
+
+// -- `bash -c '...'` payloads with cmd-active metacharacters were passed
+//    through cmd's parse layer inside single quotes (measured live: cmd
+//    performed the `>` redirect itself -> "The system cannot find the path
+//    specified", exit 1, GBK-mojibake stderr) --
+const launchInline = out('bash -c "ls -la"');
+check('G: bash -c clean payload stays inline',
+  typeof launchInline === 'string' && launchInline.startsWith('"C:\\') &&
+  launchInline.endsWith('-c "ls -la"'),
+  JSON.stringify(launchInline));
+const launchShip = out(`bash -c 'echo x > /tmp/cc-g-test.txt && cat /tmp/cc-g-test.txt'`);
+const shipRe = /^"(C:[^"]+)bash\.exe" "([^"]+cc-bash-[0-9a-f]+\.sh)"$/.exec(launchShip ?? '');
+check('G: bash -c redirect payload ships temp script', shipRe !== null, JSON.stringify(launchShip));
+if (shipRe) {
+  const scriptBody = readFileSync(shipRe[2], 'utf8').replace(/\n$/, '');
+  check('G: shipped script content is the verbatim bash program',
+    scriptBody === 'echo x > /tmp/cc-g-test.txt && cat /tmp/cc-g-test.txt',
+    JSON.stringify(scriptBody));
+  const rShip = run(`"${shipRe[1]}bash.exe" "${shipRe[2]}"`);
+  check('G: shipped bash -c payload executes (redirect survives)',
+    rShip.status === 0 && existsSync(join(RT, 'cc-g-test.txt')),
+    String(rShip.status) + ' ' + JSON.stringify(both(rShip).toString().slice(0, 120)));
+  try { unlinkSync(join(RT, 'cc-g-test.txt')); } catch { /* best effort */ }
+}
+
+// -- monitor_command feeds its single-string command through the same cmd
+//    parse layer but was previously hands-off (measured live: a bash
+//    `for i in ...; do ...; done` died with cmd's GBK "此時不應有 i", exit 1;
+//    the args-split form passes argv natively and works) --
+const monFor = hooks.beforeToolCall({
+  toolName: 'monitor_command',
+  input: {command: 'for i in 1 2 3; do echo $i; done'},
+})?.input?.command;
+check('G: monitor bash for-loop routes to bash',
+  typeof monFor === 'string' && /bash\.exe" -c "for i in 1 2 3 ?; ?do echo \$i ?; ?done"/.test(monFor),
+  JSON.stringify(monFor));
+const monArgs = hooks.beforeToolCall({
+  toolName: 'monitor_command',
+  input: {command: 'bash', args: ['-c', 'for i in 1 2 3; do echo $i; done']},
+});
+check('G: monitor args-split form stays hands-off', monArgs === undefined, JSON.stringify(monArgs));
+const monCmd = hooks.beforeToolCall({
+  toolName: 'monitor_command',
+  input: {command: 'ipconfig'},
+})?.input?.command;
+check('G: monitor pure cmd gets the utf8 wrap',
+  typeof monCmd === 'string' && monCmd.startsWith('powershell'),
+  JSON.stringify(monCmd));
+const monDir = hooks.beforeToolCall({
+  toolName: 'monitor_command',
+  input: {command: 'bash', args: ['-c', 'echo hi'], directory: '/c/Users/artin'},
+})?.input?.directory;
+check('G: monitor directory /c/... -> C:/...',
+  monDir === 'C:/Users/artin', JSON.stringify(monDir));
+check('G: /c/tmp composes drive then temp mapping',
+  rtFile('/c/tmp/x.txt') === expTemp('\\x.txt'), JSON.stringify(rtFile('/c/tmp/x.txt')));
 
 // ============ result ============
 
