@@ -1184,6 +1184,7 @@ export default function (api: ModApi): void {
 
   api.hooks({
     beforeToolCall: ({toolName, input}) => {
+      try { writeFileSync('C:\\Users\\artin\\AppData\\Local\\Temp\\cc-dbg-hooknames.txt', String(Date.now()) + ' ' + toolName + '\n', {flag: 'a'}); } catch { /* dbg */ }
       if (PATH_TOOLS.has(toolName)) {
         // File tools resolve /tmp & friends host-side (see rewriteTempPath).
         for (const key of PATH_KEYS) {
