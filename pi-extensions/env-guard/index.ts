@@ -281,6 +281,10 @@ export function rewritePath(p: string): string {
   // POSIX /tmp（MSYS 掛載不分大小寫、混合分隔符也擋：/tmp、/TMP/x、/tmp\foo）
   m = /^\/tmp([\\/].*)?$/i.exec(p);
   if (m) return norm(m[1] ?? "");
+  // MSYS 盤符路徑（/c/Users/...）：刻意不修——pi 的檔案工具解析層
+  // （resolveToCwd → normalizeWindowsShellPath）原生就把 /c/Users/x 正確映射成
+  // C:\Users\x（含 /mnt/d、/cygdrive/e），實測 e2e 無 C:\c 錯位。盤符修復只在
+  // 沒有這層正規化的 host（cmdc）才合理；在 pi 是重複防護＝純副作用。
   // bash/cmd 風格的暫存變數：工具不展開任何變數，$TEMP 曾實際建成字面資料夾。
   // $TEMP/$TMP/$TMPDIR 不分大小寫與分隔符全擋（工具語境下任何寫法都不可能展開）
   m = /^\$(?:temp|tmp|tmpdir)([\\/].*)?$/i.exec(p);
@@ -298,6 +302,14 @@ export function rewritePath(p: string): string {
 //   1. cmd //c|//k → cmd /c|/k：MSYS 慣用的雙斜線旗標在 MSYS_NO_PATHCONV=1 下
 //      會原樣抵達 cmd，cmd 不認得就進互動模式（印橫幅、指令沒跑、exit 0）——
 //      沉默的錯。只在「指令位置」的 cmd 才改寫（echo cmd //c 等資料用法不動）
+//      範圍界定（為何只修 cmd、不預防性擴及 git/npx/python/pwsh）：那些工具吃
+//      -/-- 參數，msys 轉換層不碰 - 開頭的參數，MSYS_NO_PATHCONV 開關對它們
+//      沒有可觀察影響——不是選擇性不修，是它們沒有這個故障模式。雙斜線慣用
+//      語法只存在於以 / 為 switch 前綴的程式，Windows 上即 cmd.exe（OS shell，
+//      bash 到不了的 OS 設施都得經它，e2e 實測自然觸發）。判準是故障點所在層：
+//      此故障在「本機轉換層被 MSYS_NO_PATHCONV=1 關閉」，模型語法（git-bash
+//      官方慣用法）與 cmd.exe 本身都無錯。將來若有別的工具出現「自然使用＋
+//      故障可歸因於本機環境層＋靜默失敗」三條全中的實例，再按同一標準納入。
 //   2. 偵測「cmd + 非 ASCII」：實測 cmd 的中文輸出非 UTF-8、且輸入端在
 //      ANSI 轉換時就已毀損（連 PowerShell 包裝都救不回），無法忠實改寫，只能發警告
 // 語法感知規則：

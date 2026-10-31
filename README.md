@@ -15,15 +15,29 @@
 | `chat-trim-context` | OpenCode  | `id: chat.trim-context` — 針對 `chat` agent，每次送出模型請求前清理系統提示：移除 `<env>...</env>` 段落與 worktree marker 段落 |
 
 ```
-cmdc-mods/system-prompt/index.ts     # Command Code
-cmdc-mods/env-guard/index.ts         # Command Code
-cmdc-mods/tests/env-guard/index.mjs  # env-guard（cmdc 版）的回歸測試
-pi-extensions/env-guard/index.ts     # pi
-oc-plugins/chat-trim-context/        # OpenCode v2
+cmdc-mods/system-prompt/index.ts      # Command Code
+cmdc-mods/env-guard/index.ts          # Command Code
+cmdc-mods/tests/env-guard/index.mjs   # env-guard（cmdc 版）的回歸測試
+pi-extensions/env-guard/index.ts      # pi
+pi-extensions/tests/env-guard/index.mjs # env-guard（pi 版）的單元電池
+oc-plugins/chat-trim-context/         # OpenCode v2
 ```
 
 mod/extension/plugin 名稱取自資料夾名（`index.ts` 就是本體）。三個 host 都支援
 「單檔」與「`index.ts` 資料夾」兩種形式；本 repo 統一用**資料夾式**，版面一致。
+
+## package.json 佈局
+
+每個 host 資料夾各有**自己的 `package.json`**（`cmdc-mods/`、`pi-extensions/`、
+`oc-plugins/`）——名稱、說明、keywords 隨 host 各自表述，並帶各自的 manifest，
+所以單一 host 資料夾可以直接安裝：`cmdc mods add ./cmdc-mods`、
+`pi install ./pi-extensions`。
+
+根目錄的 `package.json` **只保留 cmdc / pi 雲端（git）安裝必需的 manifest**、
+不帶共用說明：cmdc 與 pi 的 git 套件 package root 都是 repo 根目錄
+（`commandcode.mods` 與 `pi.extensions` 必須宣告在根、指向 root 內的路徑，
+兩者都不支援 git 子路徑安裝）；OpenCode 不受限——它用 `::path:` 子路徑選擇器
+直接指到 `oc-plugins/chat-trim-context/`（該資料夾另有一份自己的 package.json）。
 
 
 ## 安裝（Command Code，二選一）
@@ -56,7 +70,8 @@ cmdc mods remove  Artin0123/harness-plugins
 
 ### 1. 套件（推薦）
 
-repo 的 `package.json` 帶 `pi.extensions` manifest 指向 `pi-extensions/`，直接裝整個 repo：
+repo 根的 `package.json` 帶 `pi.extensions` manifest 指向 `pi-extensions/`（雲端 git
+安裝）；單裝 pi 這個 host 也可直接指到資料夾本身（它有自己的 package.json）：
 
 ```bash
 pi install git:github.com/Artin0123/harness-plugins
@@ -89,7 +104,7 @@ opencode plugin add "github:Artin0123/harness-plugins#master::path:oc-plugins/ch
 
 - 登記到全域 `~/.config/opencode/opencode.json` 的 `plugins`；實體安裝在 `~/.cache/opencode/npm/`
 - 以 `#master` 跟隨 master 分支，之後 `opencode plugin update chat.trim-context` 更新到最新 commit；釘版本就用完整 commit hash
-- 管理指令：`opencode plugin list` / `check` / `remove`
+- 管理指令：`opencode plugin list` / `check` / `remove`——注意 `list` 只列本地插件目錄裡的；指令安裝的要用 `check` 看（會顯示插件 id 與所在 commit）
 
 ### 2. 本地檔案安裝
 
@@ -193,14 +208,21 @@ pi 直接 spawn bash（沒有 cmd.exe 中介層），所以修法不同：
 | 項目                                                  | pi 版做法                                                                                                                                        |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `/tmp`、`$TEMP`、`$TMP`、`$TMPDIR`、`%TEMP%`、`%TMP%` | 檔案工具 host 端解析不經 MSYS 映射、不展開變數 → 改寫到 `cygpath -w /tmp` 探測的真實 temp（與 bash 的 `/tmp` 同一錨點）                          |
-| `cmd //c` / `//k`                                     | bashrc 的 `MSYS_NO_PATHCONV=1` 讓雙斜線原樣抵達 cmd → 進互動模式（橫幅、指令沒跑、exit 0）。以子 bash 探測實際值，確認關閉才改寫；探測失敗不改寫 |
+| `cmd //c` / `//k`                                     | bashrc 的 `MSYS_NO_PATHCONV=1` 讓雙斜線原樣抵達 cmd → 進互動模式（橫幅、指令沒跑、exit 0）。以子 bash 探測實際值，確認關閉才改寫；探測失敗不改寫。**實測**：pi 的 bash 經 `BASH_ENV` 一樣載入 bashrc、病理重現——banner 與 `ver` 輸出幾乎同形，無修復時模型會把 banner 誤讀成指令結果（靜默錯誤答案） |
 | cmd + 非 ASCII                                        | 實測 cmd 輸入端在 ANSI 轉換時已毀損、輸出非 UTF-8，無法忠實改寫 → 發警告，建議改用 bash 原生工具或 PowerShell 原生命令                           |
 
 **刻意不修**（原生行為或模型自身錯誤，讓它壞）：`C:\tmp`（原生寫入會成功）、
+**MSYS 盤符路徑 `/c/...`**（pi 的檔案工具解析層內建 `normalizeWindowsShellPath`
+原生正確映射 `/c/Users/x`→`C:\Users\x`（含 `/mnt/d`、`/cygdrive/e`），e2e 實測
+無 `C:\c` 錯位——盤符修復只在沒有這層正規化的 host 才合理）、
 裸 `>nul`/`&>nul`/`"nul"`（實測 pi 的 bash 把 nul 映射到丟棄裝置，不建檔——
 病理在這個執行層不存在；會建檔的僅限同進程 `/dev/null` 共存的 MSYS 原生行為，
 `rm nul` 可刪）、`<nul`（bash 直接報 ENOENT）、`2>&nul`/`<&nul`（ambiguous
-redirect，大聲失敗）、其他 cmd-ism（`del`、`dir /b`、`robocopy //mir`…）。
+redirect，大聲失敗）、其他 cmd-ism（`del`、`dir /b`、`robocopy //mir`…）、
+**原生 exe 的 posix 路徑參數**（`python /tmp/x.py`——`MSYS_NO_PATHCONV=1` 關掉
+了對原生程式 argv 的路徑轉換，原生 exe 收到字面 `/tmp/...` 找不到檔；大聲失敗，
+agent 可用 `cygpath -w` 自癒。全面改寫 argv 會誤傷依賴 posix 形式的 MSYS 工具
+參數，誤修風險大於漏修）。
 
 通知前綴 `env-guard:`；改寫與警告都用 `ctx.ui.notify`，不擋工具執行。
 
@@ -218,13 +240,14 @@ redirect，大聲失敗）、其他 cmd-ism（`del`、`dir /b`、`robocopy //mir
 ## 開發
 
 ```bash
-node cmdc-mods/tests/env-guard/index.mjs
+node cmdc-mods/tests/env-guard/index.mjs    # cmdc 版回歸測試
+node pi-extensions/tests/env-guard/index.mjs # pi 版單元電池（含「刻意不修」釘死）
 ```
 
 需要 Node ≥ 22.6（23.6 起預設支援 `.ts`，更舊的要加 `--experimental-strip-types`）。
 
-測試放在 **host 資料夾內、mod/extension 資料夾外**（`cmdc-mods/tests/`）：
-mod 資料夾裡任何腳本檔都會被發現器當成另一個 mod，測試檔放進去會變成第二個 mod；
-放在 host 資料夾下則隨 host 歸屬一目了然，且手動安裝只複製 mod 資料夾、不會把測試帶進去。
+測試放 **host 資料夾的 `tests/` 下**、與插件資料夾分離——插件資料夾保持只含
+交付物，手動安裝（`cp -r` 插件資料夾）不會把測試帶進安裝目錄；測試隨 host
+歸屬一目了然，不會失聯。
 
 通用判準（原生執行優先、修復審查清單、驗證紀律）見 [`AGENTS.md`](AGENTS.md)。

@@ -9,10 +9,9 @@
 //
 // Needs Node >= 22.6 with --experimental-strip-types (default from 23.6).
 //
-// NOTE: this file lives in cmdc-mods/tests/ (host folder, OUTSIDE the mod
-// folder). Discovery treats any script file inside a mod folder as another
-// mod of its own, so a test file dropped next to a mod's index.ts would
-// register as a second mod.
+// NOTE: tests live in the HOST folder's tests/ (cmdc-mods/tests/), outside
+// the mod folder -- keeping plugin folders clean regardless of each host's
+// discovery rules.
 
 import {spawnSync} from 'node:child_process';
 import {existsSync, mkdtempSync, readFileSync, writeFileSync} from 'node:fs';

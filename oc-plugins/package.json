@@ -1,0 +1,8 @@
+{
+	"name": "harness-plugins-opencode",
+	"version": "0.4.0",
+	"description": "chat-trim-context（送出模型請求前清理系統提示）的 OpenCode v2 plugin 版。",
+	"keywords": ["opencode-plugin"],
+	"type": "module",
+	"repository": "git+https://github.com/Artin0123/harness-plugins.git"
+}
