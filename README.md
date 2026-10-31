@@ -2,26 +2,20 @@
 
 **Harness 插件合集**：同一套「環境修復」理念（見 [`AGENTS.md`](AGENTS.md)），各 host 各自實作、放在各自的資料夾：
 
-| host         | 資料夾           | 發現方式                                                         |
-| ------------ | ---------------- | ---------------------------------------------------------------- |
-| Command Code | `cmdc-mods/`     | `package.json` 的 `commandcode.mods` 宣告                        |
-| pi           | `pi-extensions/` | `package.json` 的 `pi.extensions` manifest（指向目錄即整層發現） |
-| OpenCode v2  | `oc-plugins/`    | `opencode plugin add` 的 `::path:` 子路徑選擇器                  |
+| host                 | 資料夾           | 發現方式                                                         |
+| -------------------- | ---------------- | ---------------------------------------------------------------- |
+| Command Code（封存） | `cmdc-mods/`     | `package.json` 的 `commandcode.mods` 宣告                        |
+| pi                   | `pi-extensions/` | `package.json` 的 `pi.extensions` manifest（指向目錄即整層發現） |
+| OpenCode v2          | `oc-plugins/`    | `opencode plugin add` 的 `::path:` 子路徑選擇器                  |
 
-| 名稱                | host      | 做什麼                                                                                                                         |
-| ------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `env-guard`         | cmdc / pi | 環境修復層（詳見下方各章節）                                                                                                   |
-| `system-prompt`     | cmdc      | 用 `SYSTEM.md` / `APPEND_SYSTEM.md` 自訂或附加系統提示詞                                                                       |
-| `chat-trim-context` | OpenCode  | `id: chat.trim-context` — 針對 `chat` agent，每次送出模型請求前清理系統提示：移除 `<env>...</env>` 段落與 worktree marker 段落 |
+> **封存中**：`cmdc-mods/`（Command Code host）停止維護——處理太麻煩，且對自訂模型的支援度不如其他 harness。以下 cmdc 相關章節與實測數據按最後驗證版本（command-code 1.88.x）保留，**可能為隨 host 更新失準**；pi 與 OpenCode 章節不受影響。
 
-```
-cmdc-mods/system-prompt/index.ts      # Command Code
-cmdc-mods/env-guard/index.ts          # Command Code
-cmdc-mods/tests/env-guard/index.mjs   # env-guard（cmdc 版）的回歸測試
-pi-extensions/env-guard/index.ts      # pi
-pi-extensions/tests/env-guard/index.mjs # env-guard（pi 版）的單元電池
-oc-plugins/chat-trim-context/         # OpenCode v2
-```
+| 名稱                | host      | 做什麼                                                                          |
+| ------------------- | --------- | ------------------------------------------------------------------------------- |
+| `env-guard`         | cmdc / pi | 環境修復層（詳見下方各章節）                                                    |
+| `system-prompt`     | cmdc      | 用 `SYSTEM.md` / `APPEND_SYSTEM.md` 自訂或附加系統提示詞                        |
+| `disable-tools`     | cmdc      | `DISABLED_TOOLS` 常數列 tool wire name——完全不載入（不送出 schema）             |
+| `chat-trim-context` | OpenCode  | `id: chat.trim-context` — 針對 `chat` agent，每次送出模型請求前清理系統提示段落 |
 
 mod/extension/plugin 名稱取自資料夾名（`index.ts` 就是本體）。三個 host 都支援
 「單檔」與「`index.ts` 資料夾」兩種形式；本 repo 統一用**資料夾式**，版面一致。
@@ -52,6 +46,7 @@ cmdc mods add Artin0123/harness-plugins -g
 
 ```bash
 cp -r cmdc-mods/system-prompt ~/.commandcode/mods/
+cp -r cmdc-mods/disable-tools ~/.commandcode/mods/
 cp -r cmdc-mods/env-guard ~/.commandcode/mods/
 ```
 
@@ -152,6 +147,38 @@ opencode plugin add "github:Artin0123/harness-plugins#master::path:oc-plugins/ch
 
 ---
 
+## disable-tools (cmdc-mods)
+
+清單寫在 mod 本體內——`cmdc-mods/disable-tools/index.ts` 的 `DISABLED_TOOLS` 常數，
+列 tool 的 **wire name**（即 `/agents` 進階清單顯示的名稱）：
+
+```ts
+const DISABLED_TOOLS: string[] = [
+	'web_search',
+	'artifact_publish',
+];
+```
+
+被列名的工具**完全不進 model**：schema 不送出、執行被拒（loud failure，agent
+可自癒改道）、sub-agent 也拿不到——用的是 mod host 的 `setActiveTools` filter
+（`withModToolFilter`），不是 permission deny（deny 只擋執行、schema 照樣進 context）。
+
+- 不會頻繁切換，所以不做外部檔案：改常數後 `/mods reload`（或新 session）生效。
+- session 開始時套用一次、每次 `run_start` 再套用一次——背景連線的 MCP 工具
+  不會被舊快照誤殺，只有被列名的才會被濾掉。
+- 空陣列 → 完全不作用（不呼叫 `setActiveTools`，不干擾其他 mod 的 filter 設定）。
+- 已知缺口：`shouldDefer` 工具（web、sleep、task_*、worktree 等）本來就不進
+  schema、走 `search_tools` 延遲載入，而 search pool 不過 mod filter——被禁用
+  的 deferred 工具仍可被搜到並載入 schema，但**執行一樣被拒**（實測回
+  `No tool named "web_search" exists`）。要連發現都擋掉，只能等 host 過濾
+  search pool，目前無解。
+
+> 沒有 JSON-only 的替代：settings/config 註冊表沒有 per-tool 開關；能「整組
+> 不註冊」的只有寫死的功能閘（`artifactsEnabled: false`、`COMMANDCODE_DISABLE_CRON=1`、
+> codemode `off`、todos mod 預設關）。通用禁用只有 mod `setActiveTools` 這一條路。
+
+---
+
 ## env-guard (cmdc-mods)
 
 **只影響 Windows。管 shell 語意的三個工具（`shell_command`、`powershell`、`monitor_command`）與檔案六件套的路徑。一個 hook、每次呼叫一個決策點。**
@@ -205,11 +232,11 @@ bash 語法的 `for i in …; do …; done` 與 `if …; then …; fi` 不誤判
 
 pi 直接 spawn bash（沒有 cmd.exe 中介層），所以修法不同：
 
-| 項目                                                  | pi 版做法                                                                                                                                        |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/tmp`、`$TEMP`、`$TMP`、`$TMPDIR`、`%TEMP%`、`%TMP%` | 檔案工具 host 端解析不經 MSYS 映射、不展開變數 → 改寫到 `cygpath -w /tmp` 探測的真實 temp（與 bash 的 `/tmp` 同一錨點）                          |
+| 項目                                                  | pi 版做法                                                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/tmp`、`$TEMP`、`$TMP`、`$TMPDIR`、`%TEMP%`、`%TMP%` | 檔案工具 host 端解析不經 MSYS 映射、不展開變數 → 改寫到 `cygpath -w /tmp` 探測的真實 temp（與 bash 的 `/tmp` 同一錨點）                                                                                                                                                                              |
 | `cmd //c` / `//k`                                     | bashrc 的 `MSYS_NO_PATHCONV=1` 讓雙斜線原樣抵達 cmd → 進互動模式（橫幅、指令沒跑、exit 0）。以子 bash 探測實際值，確認關閉才改寫；探測失敗不改寫。**實測**：pi 的 bash 經 `BASH_ENV` 一樣載入 bashrc、病理重現——banner 與 `ver` 輸出幾乎同形，無修復時模型會把 banner 誤讀成指令結果（靜默錯誤答案） |
-| cmd + 非 ASCII                                        | 實測 cmd 輸入端在 ANSI 轉換時已毀損、輸出非 UTF-8，無法忠實改寫 → 發警告，建議改用 bash 原生工具或 PowerShell 原生命令                           |
+| cmd + 非 ASCII                                        | 實測 cmd 輸入端在 ANSI 轉換時已毀損、輸出非 UTF-8，無法忠實改寫 → 發警告，建議改用 bash 原生工具或 PowerShell 原生命令                                                                                                                                                                               |
 
 **刻意不修**（原生行為或模型自身錯誤，讓它壞）：`C:\tmp`（原生寫入會成功）、
 **MSYS 盤符路徑 `/c/...`**（pi 的檔案工具解析層內建 `normalizeWindowsShellPath`
@@ -240,8 +267,10 @@ agent 可用 `cygpath -w` 自癒。全面改寫 argv 會誤傷依賴 posix 形�
 ## 開發
 
 ```bash
-node cmdc-mods/tests/env-guard/index.mjs    # cmdc 版回歸測試
-node pi-extensions/tests/env-guard/index.mjs # pi 版單元電池（含「刻意不修」釘死）
+node cmdc-mods/tests/env-guard/index.mjs      # cmdc 版回歸測試
+node cmdc-mods/tests/system-prompt/index.mjs  # system-prompt 回歸測試
+node cmdc-mods/tests/disable-tools/index.mjs  # disable-tools 回歸測試
+node pi-extensions/tests/env-guard/index.mjs  # pi 版單元電池（含「刻意不修」釘死）
 ```
 
 需要 Node ≥ 22.6（23.6 起預設支援 `.ts`，更舊的要加 `--experimental-strip-types`）。

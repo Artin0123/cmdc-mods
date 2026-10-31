@@ -1,14 +1,14 @@
 {
 	"name": "harness-plugins",
-	"version": "0.4.0",
+	"version": "0.5.0",
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"test": "node cmdc-mods/tests/env-guard/index.mjs",
+		"test": "node cmdc-mods/tests/env-guard/index.mjs && node cmdc-mods/tests/system-prompt/index.mjs && node cmdc-mods/tests/disable-tools/index.mjs",
 		"test:pi": "node pi-extensions/tests/env-guard/index.mjs"
 	},
 	"commandcode": {
-		"mods": ["./cmdc-mods/system-prompt/index.ts", "./cmdc-mods/env-guard/index.ts"]
+		"mods": ["./cmdc-mods/system-prompt/index.ts", "./cmdc-mods/disable-tools/index.ts", "./cmdc-mods/env-guard/index.ts"]
 	},
 	"pi": {
 		"extensions": ["./pi-extensions"]

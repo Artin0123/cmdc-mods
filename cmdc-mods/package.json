@@ -1,11 +1,11 @@
 {
 	"name": "harness-plugins-cmdc",
-	"version": "0.4.0",
-	"description": "env-guard（Windows shell 語意與檔案路徑修復）與 system-prompt（自訂系統提示詞）的 Command Code mods 版。",
+	"version": "0.5.0",
+	"description": "env-guard（Windows shell 語意與檔案路徑修復）、system-prompt（自訂系統提示詞）與 disable-tools（禁用指定工具）的 Command Code mods 版。",
 	"keywords": ["cmd-mod", "cmd-mod-hook", "cmd-mod-command"],
 	"type": "module",
 	"repository": "git+https://github.com/Artin0123/harness-plugins.git",
 	"commandcode": {
-		"mods": ["./system-prompt/index.ts", "./env-guard/index.ts"]
+		"mods": ["./system-prompt/index.ts", "./disable-tools/index.ts", "./env-guard/index.ts"]
 	}
 }
